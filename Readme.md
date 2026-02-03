@@ -29,8 +29,8 @@ ansible-playbook playbook.yml -e "cluster_name=cluster_1"
 | `cluster_<name>/vars.yml` | Переменные кластера: VIP, шлюз, интерфейс, списки control plane и worker нод (hostname → IP) |
 | `common_patches/` | Общие патчи Talos (Common, Registry, TimeSync, TrustedRoots и др.) |
 | `common_patches/*.j2` | Шаблоны патчей (Hostname, Link, Layer2 VIP) — рендерятся под каждую ноду |
-| `test/` | Временные сгенерированные патчи (удаляются в конце прогона) |
-| `test2/` | Результат: `secrets.yaml`, `talosconfig.yml`, конфиги нод (`controlplane_1.yml`, `worker_1.yml` и т.д.) |
+| `generated_patches/` | Временные сгенерированные патчи (удаляются в конце прогона) |
+| `output/` | Результат: `secrets.yaml`, `talosconfig.yml`, конфиги нод (`controlplane_1.yml`, `worker_1.yml` и т.д.) |
 
 ---
 
@@ -41,11 +41,10 @@ ansible-playbook playbook.yml -e "cluster_name=cluster_1"
 3. Создаёт **secrets** для Talos (если файла ещё нет).
 4. Генерирует **talosconfig** и конфиги для каждой ноды (control plane и worker) с подстановкой общих и нодовых патчей.
 5. Проверяет конфиги через **talosctl validate**.
-6. Удаляет временные файлы из `test/`.
+6. Удаляет временные файлы из `generated_patches/`.
 7. **Проверка и применение конфига на ноды** — для каждой ноды (по циклу `controlplanes` + `workers`):
-   - проверяет, что IP ноды (`item.value`) есть в соответствующем MC-файле (`test2/{{ item.key }}.yml`) через `grep`;
-   - при успешной проверке можно применять конфиг на ноду (`talosctl apply-config`; в плейбуке эта команда закомментирована — для реального применения раскомментируйте её и при необходимости уберите тестовый `echo`);
-   - если IP в файле нет — задача завершается с ошибкой, конфиг на ноду не применяется.
+   - проверяет, что IP ноды есть в соответствующем MC-файле (`output/{{ item.key }}.yml`) через `grep`; если IP нет — **задача завершается с ошибкой**;
+   - при успешной проверке можно применять конфиг (`talosctl apply-config` закомментирован — раскомментируйте в плейбуке для применения).
 8. Выводит результат проверки/применения по каждой ноде (**Print apply results**).
 
 ---
@@ -62,9 +61,9 @@ ansible-playbook playbook.yml -e "cluster_name=cluster_1"
 
 ## Заметки
 
-- **work_dir**: в плейбуке по умолчанию задан как `/common` — плейбук рассчитан на запуск в окружении, где проект смонтирован по этому пути (например, ВМ с Talos/talosctl).
+- **work_dir**: по умолчанию `/common`; можно переопределить: `-e "playbook_work_dir=/путь/к/проекту"` (например, локально: `-e "playbook_work_dir=."`).
 - Отдельные патчи для **control plane** (etcd, audit и т.п.) лежат в `common_patches/` (в т.ч. `ContolPlane_patch.yml`); при необходимости их нужно явно подключить в `playbook.yml`.
-- **Apply config**: таска «talosctl apply config for nodes» сначала проверяет через `grep`, что IP ноды присутствует в MC-файле; так конфиг не применяется не на ту ноду. Сейчас реальный вызов `talosctl apply-config` в плейбуке закомментирован — для применения конфигов на ноды раскомментируйте эту строку и при необходимости уберите тестовые `echo`.
+- **Apply config**: таска «talosctl apply config for nodes» сначала проверяет через `grep`, что IP ноды присутствует в MC-файле; при отсутствии IP задача завершается с ошибкой. Реальный вызов `talosctl apply-config` закомментирован — для применения конфигов раскомментируйте его в плейбуке.
 
 ---
 

@@ -3,7 +3,7 @@
   hosts: 127.0.0.1
   connection: local
   vars:
-    work_dir: /common
+    work_dir: "{{ playbook_work_dir | default('/common') }}"
   vars_files:
     - "{{ work_dir }}/{{ cluster_name }}/vars.yml"
   tasks:
@@ -16,10 +16,18 @@
       debug:
         var: talosctl_version.stdout_lines
 
+    - name: Ensure generated_patches and output directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ work_dir }}/generated_patches"
+        - "{{ work_dir }}/output"
+
     - name: Generate hostname patches for nodes
       template:
         src: "{{ work_dir }}/common_patches/HostnameConfig_patch.j2"
-        dest: "{{ work_dir }}/test/{{ item.key }}_HostnameConfig_patch.yml"
+        dest: "{{ work_dir }}/generated_patches/{{ item.key }}_HostnameConfig_patch.yml"
       with_dict: 
         - "{{ controlplanes }}"
         - "{{ workers }}"
@@ -27,7 +35,7 @@
     - name: Generate link patches for nodes
       template:
         src: "{{ work_dir }}/common_patches/LinkConfig_patch.j2"
-        dest: "{{ work_dir }}/test/{{ item.key }}_LinkConfig_patch.yml"
+        dest: "{{ work_dir }}/generated_patches/{{ item.key }}_LinkConfig_patch.yml"
       with_dict: 
         - "{{ controlplanes }}"
         - "{{ workers }}"
@@ -35,16 +43,16 @@
     - name: Generate layer2 VIP patches for nodes
       template:
         src: "{{ work_dir }}/common_patches/Layer2VIPConfig_patch.j2"
-        dest: "{{ work_dir }}/test/Layer2VIPConfig_patch.yml"
+        dest: "{{ work_dir }}/generated_patches/Layer2VIPConfig_patch.yml"
 
     - name: Check if secrets file exists
       stat:
-        path: "{{ work_dir }}/test2/secrets.yaml"
+        path: "{{ work_dir }}/output/secrets.yaml"
       register: secrets_file
 
     - name: Generate secret file for talos if it doesn't exist
       shell: |
-        talosctl gen secrets -f -o test2/secrets.yaml
+        talosctl gen secrets -f -o output/secrets.yaml
       args:
         chdir: "{{ work_dir }}"
       when: not secrets_file.stat.exists
@@ -52,26 +60,26 @@
     - name: Generate config file for talos
       shell: |
         talosctl gen config -f {{ cluster_name }} https://{{ vip_address }}:6443 \
-        --with-secrets test2/secrets.yaml \
+        --with-secrets output/secrets.yaml \
         --output-types talosconfig \
-        --output test2/talosconfig.yml
+        --output output/talosconfig.yml
       args:
         chdir: "{{ work_dir }}"
 
     - name: talosctl gen config for controlplanes
       shell: |
         talosctl gen config -f {{ cluster_name }} https://{{ vip_address }}:6443 \
-        --with-secrets test2/secrets.yaml \
+        --with-secrets output/secrets.yaml \
         --config-patch @common_patches/Common_patch.yml \
         --config-patch @common_patches/RegistryMirrorConfig_patch.yml \
         --config-patch @common_patches/TimeSyncConfig_patch.yml \
         --config-patch @common_patches/TrustedRootsConfig_patch.yml \
-        --config-patch-control-plane @common_patches/ContolPlane_patch.yml \
-        --config-patch-control-plane @test/Layer2VIPConfig_patch.yml \
-        --config-patch-control-plane @test/{{ item.key }}_HostnameConfig_patch.yml \
-        --config-patch-control-plane @test/{{ item.key }}_LinkConfig_patch.yml \
+        --config-patch-control-plane @common_patches/ControlPlane_patch.yml \
+        --config-patch-control-plane @generated_patches/Layer2VIPConfig_patch.yml \
+        --config-patch-control-plane @generated_patches/{{ item.key }}_HostnameConfig_patch.yml \
+        --config-patch-control-plane @generated_patches/{{ item.key }}_LinkConfig_patch.yml \
         --output-types controlplane \
-        --output test2/{{ item.key }}.yml
+        --output output/{{ item.key }}.yml
       with_dict: 
         - "{{ controlplanes }}"
       args:
@@ -80,16 +88,16 @@
     - name: talosctl gen config for workers
       shell: |
         talosctl gen config -f {{ cluster_name }} https://{{ vip_address }}:6443 \
-        --with-secrets test2/secrets.yaml \
+        --with-secrets output/secrets.yaml \
         --config-patch @common_patches/Common_patch.yml \
         --config-patch @common_patches/RegistryMirrorConfig_patch.yml \
         --config-patch @common_patches/TimeSyncConfig_patch.yml \
         --config-patch @common_patches/TrustedRootsConfig_patch.yml \
         --config-patch @common_patches/WorkerPlane_patch.yml \
-        --config-patch @test/{{ item.key }}_HostnameConfig_patch.yml \
-        --config-patch @test/{{ item.key }}_LinkConfig_patch.yml \
+        --config-patch @generated_patches/{{ item.key }}_HostnameConfig_patch.yml \
+        --config-patch @generated_patches/{{ item.key }}_LinkConfig_patch.yml \
         --output-types worker \
-        --output test2/{{ item.key }}.yml
+        --output output/{{ item.key }}.yml
       args:
         chdir: "{{ work_dir }}"
       with_dict: 
@@ -98,7 +106,7 @@
     - name: talosctl validate config for nodes
       register: validate_results
       shell: |
-        talosctl validate -m metal -c test2/{{ item.key }}.yml
+        talosctl validate -m metal -c output/{{ item.key }}.yml
       args:
         chdir: "{{ work_dir }}"
       with_dict: 
@@ -112,20 +120,19 @@
       loop_control:
         label: "{{ item.item.key }}"
 
-    - name: Remove temp files in test folder
+    - name: Remove temp files in generated_patches folder
       file:
         path: "{{ item }}"
         state: absent
       with_fileglob:
-        - "{{ work_dir }}/test/*"   
+        - "{{ work_dir }}/generated_patches/*"   
 
 
     - name: talosctl apply config for nodes
       shell: |
-        grep -q "{{ item.value }}" test2/{{ item.key }}.yml && \
-        # talosctl apply-config --insecure -n {{ item.value }} -f test2/{{ item.key }}.yml
-        echo "{{ item.value }} found in test2/{{ item.key }}.yml" || \
-        echo "{{ item.value }} not found in test2/{{ item.key }}.yml"
+        grep -q "{{ item.value }}" output/{{ item.key }}.yml || exit 1
+        echo "{{ item.value }} found in output/{{ item.key }}.yml"
+        # talosctl apply-config --insecure -n {{ item.value }} -f output/{{ item.key }}.yml
       register: apply_results
       args:
         chdir: "{{ work_dir }}"
