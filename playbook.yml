@@ -1,0 +1,141 @@
+---
+- name: Talos Playbook
+  hosts: 127.0.0.1
+  connection: local
+  vars:
+    work_dir: /common
+  vars_files:
+    - "{{ work_dir }}/{{ cluster_name }}/vars.yml"
+  tasks:
+
+    - name: Check if talosctl is installed
+      command: talosctl version --client
+      register: talosctl_version
+
+    - name: print talosctl version
+      debug:
+        var: talosctl_version.stdout_lines
+
+    - name: Generate hostname patches for nodes
+      template:
+        src: "{{ work_dir }}/common_patches/HostnameConfig_patch.j2"
+        dest: "{{ work_dir }}/test/{{ item.key }}_HostnameConfig_patch.yml"
+      with_dict: 
+        - "{{ controlplanes }}"
+        - "{{ workers }}"
+
+    - name: Generate link patches for nodes
+      template:
+        src: "{{ work_dir }}/common_patches/LinkConfig_patch.j2"
+        dest: "{{ work_dir }}/test/{{ item.key }}_LinkConfig_patch.yml"
+      with_dict: 
+        - "{{ controlplanes }}"
+        - "{{ workers }}"
+
+    - name: Generate layer2 VIP patches for nodes
+      template:
+        src: "{{ work_dir }}/common_patches/Layer2VIPConfig_patch.j2"
+        dest: "{{ work_dir }}/test/Layer2VIPConfig_patch.yml"
+
+    - name: Check if secrets file exists
+      stat:
+        path: "{{ work_dir }}/test2/secrets.yaml"
+      register: secrets_file
+
+    - name: Generate secret file for talos if it doesn't exist
+      shell: |
+        talosctl gen secrets -f -o test2/secrets.yaml
+      args:
+        chdir: "{{ work_dir }}"
+      when: not secrets_file.stat.exists
+
+    - name: Generate config file for talos
+      shell: |
+        talosctl gen config -f {{ cluster_name }} https://{{ vip_address }}:6443 \
+        --with-secrets test2/secrets.yaml \
+        --output-types talosconfig \
+        --output test2/talosconfig.yml
+      args:
+        chdir: "{{ work_dir }}"
+
+    - name: talosctl gen config for controlplanes
+      shell: |
+        talosctl gen config -f {{ cluster_name }} https://{{ vip_address }}:6443 \
+        --with-secrets test2/secrets.yaml \
+        --config-patch @common_patches/Common_patch.yml \
+        --config-patch @common_patches/RegistryMirrorConfig_patch.yml \
+        --config-patch @common_patches/TimeSyncConfig_patch.yml \
+        --config-patch @common_patches/TrustedRootsConfig_patch.yml \
+        --config-patch-control-plane @common_patches/ContolPlane_patch.yml \
+        --config-patch-control-plane @test/Layer2VIPConfig_patch.yml \
+        --config-patch-control-plane @test/{{ item.key }}_HostnameConfig_patch.yml \
+        --config-patch-control-plane @test/{{ item.key }}_LinkConfig_patch.yml \
+        --output-types controlplane \
+        --output test2/{{ item.key }}.yml
+      with_dict: 
+        - "{{ controlplanes }}"
+      args:
+        chdir: "{{ work_dir }}"
+
+    - name: talosctl gen config for workers
+      shell: |
+        talosctl gen config -f {{ cluster_name }} https://{{ vip_address }}:6443 \
+        --with-secrets test2/secrets.yaml \
+        --config-patch @common_patches/Common_patch.yml \
+        --config-patch @common_patches/RegistryMirrorConfig_patch.yml \
+        --config-patch @common_patches/TimeSyncConfig_patch.yml \
+        --config-patch @common_patches/TrustedRootsConfig_patch.yml \
+        --config-patch @common_patches/WorkerPlane_patch.yml \
+        --config-patch @test/{{ item.key }}_HostnameConfig_patch.yml \
+        --config-patch @test/{{ item.key }}_LinkConfig_patch.yml \
+        --output-types worker \
+        --output test2/{{ item.key }}.yml
+      args:
+        chdir: "{{ work_dir }}"
+      with_dict: 
+        - "{{ workers }}"
+
+    - name: talosctl validate config for nodes
+      register: validate_results
+      shell: |
+        talosctl validate -m metal -c test2/{{ item.key }}.yml
+      args:
+        chdir: "{{ work_dir }}"
+      with_dict: 
+        - "{{ controlplanes }}"
+        - "{{ workers }}"
+
+    - name: Print validate results for each node
+      debug:
+        msg: "Node: {{ item.item.key }} - Result: {{ item.stdout }}"
+      loop: "{{ validate_results.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: Remove temp files in test folder
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_fileglob:
+        - "{{ work_dir }}/test/*"   
+
+
+    - name: talosctl apply config for nodes
+      shell: |
+        grep -q "{{ item.value }}" test2/{{ item.key }}.yml && \
+        # talosctl apply-config --insecure -n {{ item.value }} -f test2/{{ item.key }}.yml
+        echo "{{ item.value }} found in test2/{{ item.key }}.yml" || \
+        echo "{{ item.value }} not found in test2/{{ item.key }}.yml"
+      register: apply_results
+      args:
+        chdir: "{{ work_dir }}"
+      with_dict: "{{ controlplanes | combine(workers) }}"
+      loop_control:
+        label: "{{ item.key }} ({{ item.value }})"
+
+    - name: Print apply results
+      debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ apply_results.results }}"
+      loop_control:
+        label: "{{ item.item.key }} ({{ item.item.value }})"

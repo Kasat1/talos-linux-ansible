@@ -1,0 +1,7 @@
+apiVersion: v1alpha1
+kind: TimeSyncConfig
+bootTimeout: 2m
+ntp:
+    servers:
+        - 0.pool.ntp.org
+        - 1.pool.ntp.org

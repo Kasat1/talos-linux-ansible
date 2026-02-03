@@ -1,0 +1,7 @@
+apiVersion: v1alpha1
+kind: LinkConfig
+name: "{{ ethernet_interface }}"
+addresses:
+    - address: {{ item.value }}/24
+routes:
+    - gateway: "{{ gateway }}"

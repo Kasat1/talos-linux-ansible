@@ -1,0 +1,4 @@
+cluster:
+    etcd:    
+        # # The container image used to create the etcd service.
+        image: registry.k8s.io/etcd:v3.6.5
