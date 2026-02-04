@@ -1,4 +1,6 @@
-# Talos Linux — генерация конфигов через Ansible
+# Talos Linux release 1.12.1
+
+генерация конфигов через Ansible
 
 Ansible-плейбук для генерации конфигураций Talos Linux по переменным из папки кластера: hostname, сеть, VIP, секреты и конфиги для control plane и worker нод.
 
